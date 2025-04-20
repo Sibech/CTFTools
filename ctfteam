@@ -1,0 +1,154 @@
+#!/usr/bin/env bash
+#
+# Usage:
+#   ctfteam top [limit] [year]
+#   ctfteam <team_id> [year]
+#   
+#   0-Day Aarhus: 251818
+
+# check for dependencies
+for cmd in curl jq awk pup; do
+  if ! command -v "$cmd" >/dev/null 2>&1; then
+    echo "Error: '$cmd' is required but not installed." >&2
+    exit 1
+  fi
+done
+
+usage() {
+  cat <<EOF
+Usage:
+  $0 top [limit] [year]     # show top teams
+  $0 <team_id> [year]       # show team or top‑10 events in YEAR
+  
+  0-Day Aarhus: 251818
+EOF
+  exit 1
+}
+
+[ $# -ge 1 ] || usage
+
+if [ "$1" = "top" ]; then
+  ## top teams (unchanged) ###
+  limit=10; year=""
+  if [ -n "$2" ] && [[ "$2" =~ ^[0-9]+$ ]]; then limit=$2; fi
+  if [ -n "$3" ] && [[ "$3" =~ ^[0-9]{4}$ ]]; then year=$3; fi
+
+  if [ -n "$year" ]; then
+    url="https://ctftime.org/api/v1/top/${year}/?limit=${limit}"
+  else
+    url="https://ctftime.org/api/v1/top/?limit=${limit}"
+  fi
+
+  resp=$(curl -s "$url") || { echo "Failed to fetch $url" >&2; exit 1; }
+  yr=$(jq -r 'keys[0]' <<<"$resp")
+
+  echo
+  echo "Top $limit teams for $yr"
+  echo
+  printf "%4s | %-35s | %7s | %7s\n" "Rank" "Team Name" "Points" "Team ID"
+  printf -- "-----+-------------------------------------+---------+--------\n"
+
+  jq -r --arg YR "$yr" '
+    .[$YR]
+    | to_entries[]
+    | [(.key+1), .value.team_name, .value.points, .value.team_id]
+    | @tsv
+  ' <<<"$resp" \
+  | awk -F'\t' '{ printf "%4d | %-35s | %7.2f | %7s\n", $1, $2, $3, $4 }'
+
+  exit 0
+fi
+
+if [[ "$1" =~ ^[0-9]+$ ]]; then
+  tid=$1
+
+  # ── if year supplied, fetch team info then scrape top‑10 events by points ──
+  if [[ -n "$2" && "$2" =~ ^[0-9]{4}$ ]]; then
+    year=$2
+
+    # fetch team info for header
+    info=$(curl -s "https://ctftime.org/api/v1/teams/${tid}/") || { echo "Failed to fetch team info" >&2; exit 1; }
+    name=$(jq -r '.name' <<<"$info")
+    alias=$(jq -r '.primary_alias' <<<"$info")
+    country=$(jq -r '.country' <<<"$info")
+    aliases=$(jq -r '.aliases | join(", ")' <<<"$info")
+
+    # print header
+    echo
+    echo "Team:    $name"
+    echo "Alias:   $alias"
+    echo "Country: $country"
+    echo "Aliases: $aliases"
+    echo
+
+    # scrape the year's table
+    raw=$(curl -s "https://ctftime.org/team/$tid/") || { echo "Failed to fetch team page" >&2; exit 1; }
+    data=$(echo "$raw" \
+      | pup "div#rating_${year} table tbody tr json{}" \
+      | jq -r '
+          .[]
+          | (.children | map(select(.tag=="td"))) as $td
+          | select($td | length >= 5)
+          | [
+              ($td[1].text // ""),                                # place
+              ($td[2].children[0].text // ""),                     # event
+              ($td[4].text // ""                                   # rating pts
+                 | gsub(",";"") 
+                 | tonumber? // 0)
+            ]
+          | @tsv
+        '
+    )
+
+    # print sorted by points
+    echo "Top 10 events in $year by points"
+    echo
+    printf "%3s | %-40s | %6s\n" "Pl." "Event" "Points"
+    printf -- "----+------------------------------------------+-------\n"
+
+    echo "$data" \
+      | sort -t $'\t' -k3,3nr \
+      | head -n10 \
+      | awk -F'\t' '{ printf "%3s | %-40s | %6.2f\n", $1, $2, $3 }'
+
+    exit 0
+  fi
+
+  # ── otherwise show the team summary ──
+  resp=$(curl -s "https://ctftime.org/api/v1/teams/${tid}/") || { echo "Failed to fetch team info" >&2; exit 1; }
+
+  name=$(jq -r '.name' <<<"$resp")
+  alias=$(jq -r '.primary_alias' <<<"$resp")
+  country=$(jq -r '.country' <<<"$resp")
+  aliases=$(jq -r '.aliases | join(", ")' <<<"$resp")
+
+  echo
+  echo "Team:    $name"
+  echo "Alias:   $alias"
+  echo "Country: $country"
+  echo "Aliases: $aliases"
+  echo
+  printf "%4s | %7s | %6s | %7s\n" "Year" "Points" "Global" "Country"
+  printf -- "-----+---------+--------+--------\n"
+
+  jq -r '
+    .rating
+    | to_entries
+    | sort_by(.key|tonumber)
+    | reverse
+    | map(select(.value.rating_points != null))
+    | .[]
+    | [
+        .key,
+        .value.rating_points,
+        (.value.rating_place  // "-"),
+        (.value.country_place // "-")
+      ]
+    | @tsv
+  ' <<<"$resp" \
+  | awk -F'\t' '{ printf "%4s | %7.2f | %6s | %7s\n", $1, $2, $3, $4 }'
+
+  exit 0
+fi
+
+usage

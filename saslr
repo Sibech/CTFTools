@@ -1,0 +1,23 @@
+#!/bin/bash
+
+# set_aslr.sh - Set ASLR level to 0, 1, or 2
+
+if [[ "$#" -ne 1 ]]; then
+	echo "Usage: sets ASLR level to 0 (disabled), 1 (partial) or 2 (full)"
+    exit 1
+fi
+
+LEVEL="$1"
+
+# Validate input
+if [[ "$LEVEL" != "0" && "$LEVEL" != "1" && "$LEVEL" != "2" ]]; then
+    echo "Invalid ASLR level: $LEVEL"
+    echo "Please provide 0 (disabled), 1 (partial), or 2 (full)"
+    exit 1
+fi
+
+# Set the ASLR level
+echo "$LEVEL" | sudo tee /proc/sys/kernel/randomize_va_space > /dev/null
+
+# Confirm and show the current setting
+echo "ASLR level set to: $(cat /proc/sys/kernel/randomize_va_space)"

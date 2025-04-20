@@ -1,0 +1,86 @@
+#!/bin/bash
+
+# List of known non-user functions to ignore
+IGNORED_FUNCS=("deregister_tm_clones" "_dl_relocate_sta" "__do_global_dtors_aux"
+               "frame_dummy" "register_tm_clones" "_fini" "_start" "_init")
+
+# Check for required tools
+check_dependencies() {
+    for cmd in file checksec readelf; do
+        if ! command -v "$cmd" &> /dev/null; then
+            echo "Error: '$cmd' is required but not installed."
+            exit 1
+        fi
+    done
+}
+
+# Run `file` and detect if stripped
+check_file_and_strip() {
+    local file="$1"
+    echo "==> file"
+    FILE_OUTPUT=$(file "$file")
+    echo "$FILE_OUTPUT"
+    # Check if it's stripped
+    if echo "$FILE_OUTPUT" | grep -q "not stripped"; then
+        STRIPPED="no"
+    else
+        STRIPPED="yes"
+    fi
+}
+
+# Run `checksec`
+run_checksec() {
+    local file="$1"
+    echo
+    echo "==> checksec"
+    pwn checksec --file="$file"
+}
+
+# Extract and display user-defined functions
+show_user_functions() {
+    local file="$1"
+    echo
+    echo '==> readelf -s (filtered)'
+    if [ "$STRIPPED" == "yes" ]; then
+        echo "[!] Note: ELF binary is stripped — symbols may be incomplete or missing."
+    fi
+
+    # readelf columns are:
+    # Num:    Value          Size Type    Bind   Vis      Ndx Name
+    #    $2 is Value (address), $4 is Type, $7 is Ndx, $8 is Name
+    readelf -s "$file" 2>/dev/null \
+      | awk '$4=="FUNC" && $7!="UND" { print $2, $8 }' \
+      | sort -k2 -u \
+      | while read -r addr sym; do
+          # skip any ignored prefixes
+          skip=0
+          for ignore in "${IGNORED_FUNCS[@]}"; do
+              if [[ "$sym" == "$ignore"* ]]; then
+                  skip=1
+                  break
+              fi
+          done
+          if [[ $skip -eq 0 ]]; then
+              # align the address in a fixed-width column
+              printf "0x%-16s %s\n" "$addr" "$sym"
+          fi
+      done
+}
+
+# Main
+if [ $# -ne 1 ]; then
+    echo "Usage: $0 <file>"
+    exit 1
+fi
+
+TARGET="$1"
+
+if [ ! -f "$TARGET" ]; then
+    echo "Error: '$TARGET' is not a valid file."
+    exit 1
+fi
+
+check_dependencies
+check_file_and_strip "$TARGET"
+run_checksec "$TARGET"
+show_user_functions "$TARGET"

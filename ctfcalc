@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+
+if [ "$#" -ne 5 ]; then
+  echo "Usage: $0 team_points best_points team_place total_teams weight"
+  exit 1
+fi
+
+team_points=$1     
+best_points=$2       
+team_place=$3    
+total_teams=$4   
+weight=$5
+
+awk -v team_points="$team_points" -v best_points="$best_points" -v team_place="$team_place" -v total_teams="$total_teams" -v weight="$weight" '
+BEGIN {
+  if (best_points == 0) {
+    print "Error: best_points must be nonzero" > "/dev/stderr"
+    exit 1
+  }
+  points_coef = team_points / best_points
+  place_coef = 1 / team_place
+  if (points_coef > 0) {
+	  points = (points_coef + place_coef) * weight / (1 / (1 + team_place / total_teams))
+  } else {
+    points = 0
+  }
+  printf "%.2f points\n", points
+}'
